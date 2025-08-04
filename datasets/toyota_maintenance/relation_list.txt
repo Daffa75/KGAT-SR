@@ -1,0 +1,6 @@
+at_age	0
+co_replaced_with	1
+is_model	2
+is_part_of	3
+replaced_part	4
+underwent_service	5

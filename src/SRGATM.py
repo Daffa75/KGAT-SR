@@ -69,6 +69,7 @@ class SRGAT(nn.Module):
 
         self.batch_size = args.batchSize
         self.nonhybrid = args.nonhybrid
+        self.n_node = self.n_items
         self.embedding = nn.Embedding(self.n_node, self.hidden_size)
         self.gnn = GNN(self.hidden_size, step=args.step)
         self.linear_one = nn.Linear(self.hidden_size, self.hidden_size, bias=True)

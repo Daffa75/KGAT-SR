@@ -13,7 +13,7 @@ class KGraph():
         self.MASK = 0
 
     def get_kg(self):
-        kg_path = '../datasets/'+ self.dataset + '/kg.txt'
+        kg_path = 'datasets/'+ self.dataset + '/kg.txt'
         G = nx.Graph()
         all_rels = []
         with open(kg_path, 'r') as f:

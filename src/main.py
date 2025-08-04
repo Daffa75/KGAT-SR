@@ -48,16 +48,16 @@ print(opt)
 
 
 def main():
-    train_data = pickle.load(open('../datasets/' + opt.dataset + '/train.txt', 'rb'))
+    train_data = pickle.load(open('datasets/' + opt.dataset + '/train.txt', 'rb'))
     if opt.validation:
         train_data, valid_data = split_validation(train_data, opt.valid_portion)
         test_data = valid_data
     else:
-        test_data = pickle.load(open('../datasets/' + opt.dataset+ '/test.txt', 'rb'))
-       train_data = Data(train_data, shuffle=True)
-    test_data = Data(test_data, shuffle=False)
+        test_data = pickle.load(open('datasets/' + opt.dataset+ '/test.txt', 'rb'))
+        train_data = Data(train_data, shuffle=True)
+        test_data = Data(test_data, shuffle=False)
         loader = utils.Loader(opt)
-    model = trans_to_cuda(SRGAT(opt, n_node,loader.n_relation,torch.Tensor(loader.D_node).to(device),torch.Tensor(loader.adj_entity).long().to(device),
+    model = trans_to_cuda(SRGAT(opt, loader.n_entity,loader.n_relation,torch.Tensor(loader.D_node).to(device),torch.Tensor(loader.adj_entity).long().to(device),
                                 torch.Tensor(loader.adj_relation).long().to(device)))
 
 

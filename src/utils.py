@@ -135,35 +135,31 @@ class Loader():
         return train_idx_list, valid_idx_list
 
     def load_data(self):
-        users, entities, attrs = list(), list(), list()
-        # df = pd.read_csv(f'{self.dataset}data.tsv', header=None, names=['user', 'item', 'rating', 'timestamp'],sep='\t')
-        train_data = pickle.load(open('../datasets/' + self.dataset + '/train.txt', 'rb'))
-
-        df = pd.read_csv( train_data)
-        # del df['rating']
-        #df = df.sort_values(['user', 'timestamp'], ascending=[True, True])
-        all_items_list = sorted(df['movieID'].unique().tolist())
-
-        black_list = df.groupby('userID').apply(lambda subdf:
-                                              [i for i in subdf.item.values]).to_dict()
-
-        black_list_path = {u: self.kg.entity_seq_shortest_path(black_list[u])
-                           for u in black_list}
-        for (user, entity_list) in black_list_path.items():
-            users += [user] * len(entity_list)
-            entities += [e_a[0] for e_a in entity_list]
-            attrs += [e_a[1] for e_a in entity_list]
-        data = pd.DataFrame({'user': users, 'item': entities, 'attr': attrs})
-
-        train_idx_list, valid_idx_list = self.get_idx(data)
-        train_ds = HistDataset(data, train_idx_list, self.attr_size, self.hist_max_len)
-        valid_ds = HistDataset(data, valid_idx_list, self.attr_size, self.hist_max_len)
-
-        train_dl = DataLoader(train_ds, self.train_batch_size, pin_memory=True, shuffle=True, drop_last=True,
-                              num_workers=self.n_workers)
-        valid_dl = DataLoader(valid_ds, self.eval_batch_size, pin_memory=True, num_workers=self.n_workers)
-
-        return all_items_list, train_dl, valid_dl
+        # The original function was attempting to load the data as a CSV, which is incorrect
+        # for the current pickled tuple format (sequences, targets).
+        # This revised function correctly computes the list of all unique items
+        # and returns dummy values for the unused DataLoader objects.
+    
+        train_data = pickle.load(open('datasets/' + self.dataset + '/train.txt', 'rb'))
+        train_sequences, train_targets = train_data
+    
+        test_data = pickle.load(open('datasets/' + self.dataset + '/test.txt', 'rb'))
+        test_sequences, test_targets = test_data
+    
+        all_items = set()
+        for seq in train_sequences:
+            all_items.update(seq)
+        all_items.update(train_targets)
+    
+        for seq in test_sequences:
+            all_items.update(seq)
+        all_items.update(test_targets)
+    
+        all_items_list = sorted(list(all_items))
+    
+        # The DataLoaders (train_dl, valid_dl) are not used by the main script,
+        # which uses the `Data` class instead. Returning None for them.
+        return all_items_list, None, None
 
 
 def build_graph(train_data):
