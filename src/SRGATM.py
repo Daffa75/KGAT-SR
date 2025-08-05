@@ -178,18 +178,31 @@ def trans_to_cpu(variable):
     else:
         return variable
 
-def forward(model, i, data, entitygat):
-    alias_inputs, A, items, mask, targets = data.get_slice(i)
+def forward(model, i, data):
+    # The get_slice method now returns all the data we need
+    alias_inputs, A, items, mask, targets, h_items, h_attrs, t_item = data.get_slice(i)
+
+    # Move data to GPU
     alias_inputs = trans_to_cuda(torch.Tensor(alias_inputs).long())
     items = trans_to_cuda(torch.Tensor(items).long())
     A = trans_to_cuda(torch.Tensor(A).float())
     mask = trans_to_cuda(torch.Tensor(mask).long())
-    hidden = model(items, A)
-    qstar = torch.cat(hidden,entitygat)
-    get = lambda i: qstar [i][alias_inputs[i]]
-    seq_hidden = torch.stack([get(i) for i in torch.arange(len(alias_inputs)).long()])
-    return targets, model.compute_scores(seq_hidden, mask)
+    h_items = trans_to_cuda(torch.from_numpy(h_items).long())
+    h_attrs = trans_to_cuda(torch.from_numpy(h_attrs).long())
+    t_item = trans_to_cuda(torch.from_numpy(t_item).long())
 
+    # Get hidden states from the model
+    hidden = model(items, A)
+    
+    # Get the hidden state of the last item in each session
+    get = lambda i: hidden[i][alias_inputs[i]]
+    seq_hidden = torch.stack([get(i) for i in torch.arange(len(alias_inputs)).long()])
+    
+    # Compute scores and return targets
+    _, scores = model.compute_scores(seq_hidden, mask)
+    return targets, scores
+
+# Replace the existing train_test function in SRGATM.py
 def train_test(model, train_data, test_data, batch, args):
     model.scheduler.step()
     print('start training: ', datetime.datetime.now())
@@ -198,34 +211,8 @@ def train_test(model, train_data, test_data, batch, args):
     slices = train_data.generate_batch(model.batch_size)
     for i, j in zip(slices, np.arange(len(slices))):
         model.optimizer.zero_grad()
-        
-        # Get data for the current batch
-        alias_inputs, A, items, mask, targets, h_items, h_attrs, t_item = train_data.get_slice(i)
-        alias_inputs = trans_to_cuda(torch.Tensor(alias_inputs).long())
-        items = trans_to_cuda(torch.Tensor(items).long())
-        A = trans_to_cuda(torch.Tensor(A).float())
-        mask = trans_to_cuda(torch.Tensor(mask).long())
-        h_items = trans_to_cuda(torch.Tensor(h_items).long())
-        h_attrs = trans_to_cuda(torch.Tensor(h_attrs).long())
-        t_item = trans_to_cuda(torch.Tensor(t_item).long())
-
-        # Forward pass
-        hidden, entitygat = model(items, A, h_items, h_attrs, t_item)
-        
-        # Get sequence hidden state
-        get = lambda i: hidden[i][alias_inputs[i]]
-        seq_hidden = torch.stack([get(i) for i in torch.arange(len(alias_inputs)).long()])
-
-        # Combine session and entity embeddings
-        qstar = torch.cat([seq_hidden, entitygat.unsqueeze(1).repeat(1, seq_hidden.size(1), 1)], dim=-1)
-        
-        # Compute scores
-        # Assuming model has a compute_scores method
-        # This part might need adjustment based on how you want to combine the embeddings and compute final scores
-        # For now, let's assume a simple transformation on the combined embedding
-        qstar_transformed = model.linear_transform(qstar)
-        _, scores = model.compute_scores(qstar_transformed, mask)
-        
+        # The forward function now handles getting data and running the model
+        targets, scores = forward(model, i, train_data)
         targets = trans_to_cuda(torch.Tensor(targets).long())
         loss = model.loss_function(scores, targets - 1)
         loss.backward()
@@ -240,26 +227,10 @@ def train_test(model, train_data, test_data, batch, args):
     hit, mrr = [], []
     slices = test_data.generate_batch(model.batch_size)
     for i in slices:
-        alias_inputs, A, items, mask, targets, h_items, h_attrs, t_item = test_data.get_slice(i)
-        alias_inputs = trans_to_cuda(torch.Tensor(alias_inputs).long())
-        items = trans_to_cuda(torch.Tensor(items).long())
-        A = trans_to_cuda(torch.Tensor(A).float())
-        mask = trans_to_cuda(torch.Tensor(mask).long())
-        h_items = trans_to_cuda(torch.Tensor(h_items).long())
-        h_attrs = trans_to_cuda(torch.Tensor(h_attrs).long())
-        t_item = trans_to_cuda(torch.Tensor(t_item).long())
-
-        hidden, entitygat = model(items, A, h_items, h_attrs, t_item)
-        get = lambda i: hidden[i][alias_inputs[i]]
-        seq_hidden = torch.stack([get(i) for i in torch.arange(len(alias_inputs)).long()])
-        
-        qstar = torch.cat([seq_hidden, entitygat.unsqueeze(1).repeat(1, seq_hidden.size(1), 1)], dim=-1)
-        qstar_transformed = model.linear_transform(qstar)
-        
-        _, scores = model.compute_scores(qstar_transformed, mask)
+        targets, scores = forward(model, i, test_data)
         sub_scores = scores.topk(20)[1]
         sub_scores = trans_to_cpu(sub_scores).detach().numpy()
-        for score, target, mask_ in zip(sub_scores, targets, test_data.mask):
+        for score, target, mask in zip(sub_scores, targets, test_data.mask[i]):
             hit.append(np.isin(target - 1, score))
             if len(np.where(score == target - 1)[0]) == 0:
                 mrr.append(0)

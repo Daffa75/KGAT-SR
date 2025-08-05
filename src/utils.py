@@ -201,7 +201,7 @@ def split_validation(train_set, valid_portion):
     return (train_set_x, train_set_y), (valid_set_x, valid_set_y)
 
 class Data():
-    def __init__(self, data, sub_graph=False, method='ggnn', sparse=False, shuffle=False):
+    def __init__(self, data, kg, sub_graph=False, method='ggnn', sparse=False, shuffle=False):
         inputs = data[0]
         inputs, mask, len_max = data_masks(inputs, [0])
         self.inputs = np.asarray(inputs)
@@ -213,6 +213,7 @@ class Data():
         self.sub_graph = sub_graph
         self.sparse = sparse
         self.method = method
+        self.kg = kg  # Store the knowledge graph object
 
     def generate_batch(self, batch_size):
         if self.shuffle:
@@ -225,54 +226,68 @@ class Data():
         if self.length % batch_size != 0:
             n_batch += 1
         slices = np.split(np.arange(n_batch * batch_size), n_batch)
-        slices[-1] = np.arange(self.length-batch_size, self.length)
+        slices[-1] = np.arange(self.length - batch_size, self.length)
         return slices
 
     def get_slice(self, index):
-        if 1:
-            items, n_node, A_in, A_out, alias_inputs = [], [], [], [], []
-            for u_input in self.inputs[index]:
-                n_node.append(len(np.unique(u_input)))
-            max_n_node = np.max(n_node)
-            if self.method == 'ggnn':
-                for u_input in self.inputs[index]:
-                    node = np.unique(u_input)
-                    items.append(node.tolist() + (max_n_node - len(node)) * [0])
-                    u_A = np.zeros((max_n_node, max_n_node))
-                    for i in np.arange(len(u_input) - 1):
-                        if u_input[i + 1] == 0:
-                            break
-                        u = np.where(node == u_input[i])[0][0]
-                        v = np.where(node == u_input[i + 1])[0][0]
-                        u_A[u][v] = 1
-                    u_sum_in = np.sum(u_A, 0)
-                    u_sum_in[np.where(u_sum_in == 0)] = 1
-                    u_A_in = np.divide(u_A, u_sum_in)
-                    u_sum_out = np.sum(u_A, 1)
-                    u_sum_out[np.where(u_sum_out == 0)] = 1
-                    u_A_out = np.divide(u_A.transpose(), u_sum_out)
+        # Get batch data
+        inputs_batch = self.inputs[index]
+        targets_batch = self.targets[index]
+        mask_batch = self.mask[index]
 
-                    A_in.append(u_A_in)
-                    A_out.append(u_A_out)
-                    alias_inputs.append([np.where(node == i)[0][0] for i in u_input])
-                return A_in, A_out, alias_inputs, items, self.mask[index], self.targets[index]
-            elif self.method == 'gat':
-                A_in = []
-                A_out = []
-                for u_input in self.inputs[index]:
-                    node = np.unique(u_input)
-                    items.append(node.tolist() + (max_n_node - len(node)) * [0])
-                    u_A = np.eye(max_n_node)
-                    for i in np.arange(len(u_input) - 1):
-                        if u_input[i + 1] == 0:
-                            break
-                        u = np.where(node == u_input[i])[0][0]
-                        v = np.where(node == u_input[i + 1])[0][0]
-                        u_A[u][v] = 1
-                    A_in.append(-1e9 * (1 - u_A))
-                    A_out.append(-1e9 * (1 - u_A.transpose()))
-                    alias_inputs.append([np.where(node == i)[0][0] for i in u_input])
-                return A_in, A_out, alias_inputs, items, self.mask[index], self.targets[index]
+        # Initialize lists for graph construction
+        items, n_node, A_in, A_out, alias_inputs = [], [], [], [], []
+        for u_input in inputs_batch:
+            n_node.append(len(np.unique(u_input)))
+        max_n_node = np.max(n_node)
 
-        else:
-            return self.inputs[index], self.mask[index], self.targets[index]
+        # Construct session graphs for the batch
+        for u_input in inputs_batch:
+            node = np.unique(u_input)
+            items.append(node.tolist() + (max_n_node - len(node)) * [0])
+            u_A = np.zeros((max_n_node, max_n_node))
+            for i in np.arange(len(u_input) - 1):
+                if u_input[i + 1] == 0:
+                    break
+                u = np.where(node == u_input[i])[0][0]
+                v = np.where(node == u_input[i + 1])[0][0]
+                u_A[u][v] = 1
+
+            u_sum_in = np.sum(u_A, 0)
+            u_sum_in[np.where(u_sum_in == 0)] = 1
+            u_A_in = np.divide(u_A, u_sum_in)
+            u_sum_out = np.sum(u_A, 1)
+            u_sum_out[np.where(u_sum_out == 0)] = 1
+            u_A_out = np.divide(u_A.transpose(), u_sum_out)
+
+            A_in.append(u_A_in)
+            A_out.append(u_A_out)
+            alias_inputs.append([np.where(node == i)[0][0] for i in u_input])
+        
+        # Combine adjacency matrices
+        A = np.concatenate([A_in, A_out], axis=2)
+
+        # Fetch knowledge graph attributes for the batch
+        h_attrs_batch = []
+        for u_input in inputs_batch:
+            # Remove padding before fetching attributes
+            u_input_no_padding = [i for i in u_input if i != 0]
+            
+            # Get attributes from the knowledge graph
+            entity_attrs_path = self.kg.entity_seq_shortest_path(u_input_no_padding)
+            attrs = [item[1] for item in entity_attrs_path]
+            
+            # Pad attributes to match the max sequence length
+            padded_attrs = np.zeros((self.len_max, self.kg.sample_attr_size), dtype=np.int64)
+            if len(attrs) > 0:
+                 padded_attrs[:len(attrs), :] = attrs
+            h_attrs_batch.append(padded_attrs)
+
+        # The 'h_items' are the input sequences themselves
+        h_items_batch = inputs_batch
+        
+        # The 't_item' are the targets
+        t_item_batch = targets_batch
+
+        # Return all 8 values as expected by the train_test function
+        return alias_inputs, A, items, mask_batch, t_item_batch, h_items_batch, np.array(h_attrs_batch), t_item_batch

@@ -6,6 +6,7 @@ from torch.utils.data import Dataset, DataLoader
 
 import utils
 from SRGATM import *
+from kg import KGraph  # Import the KGraph class
 device = torch.device('cuda:0')
 
 
@@ -48,17 +49,25 @@ print(opt)
 
 
 def main():
-    train_data = pickle.load(open('datasets/' + opt.dataset + '/train.txt', 'rb'))
+    train_data_sessions = pickle.load(open('../datasets/' + opt.dataset + '/train.txt', 'rb'))
     if opt.validation:
-        train_data, valid_data = split_validation(train_data, opt.valid_portion)
-        test_data = valid_data
+        train_data_sessions, valid_data_sessions = split_validation(train_data_sessions, opt.valid_portion)
+        test_data_sessions = valid_data_sessions
     else:
-        test_data = pickle.load(open('datasets/' + opt.dataset+ '/test.txt', 'rb'))
-        train_data = Data(train_data, shuffle=True)
-        test_data = Data(test_data, shuffle=False)
-        loader = utils.Loader(opt)
-        n_node = loader.n_entity
+        test_data_sessions = pickle.load(open('../datasets/' + opt.dataset + '/test.txt', 'rb'))
 
+    # 1. Create the Knowledge Graph object
+    kg = KGraph(dataset=opt.dataset, attr_size=opt.attr_size)
+    n_node = kg.n_entity # Get number of nodes from the KG
+
+    # 2. Pass the knowledge graph object (kg) to the Data class constructor
+    train_data = Data(train_data_sessions, kg=kg, shuffle=True)
+    test_data = Data(test_data_sessions, kg=kg, shuffle=False)
+
+    # The SRGAT model requires several KG-related arguments for initialization.
+    # The `Loader` class is a convenient way to get them, even if we don't use its data loaders directly.
+    loader = utils.Loader(opt)
+    
     model = trans_to_cuda(SRGAT(opt, n_node, loader.n_relation, 
                                 torch.Tensor(loader.D_node).to(device), 
                                 torch.Tensor(loader.adj_entity).long().to(device), 
