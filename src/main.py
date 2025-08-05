@@ -92,6 +92,13 @@ def main():
             best_result[1] = mrr
             best_epoch[1] = epoch
             flag = 1
+
+        # --- Add this block to save the model ---
+        if flag == 1:
+            torch.save(model.state_dict(), f'{opt.dataset}_best_model.pth')
+            print('Saving best model state to disk...')
+        # ----------------------------------------
+        
         print('Best Result:')
         print('\tHR@20:\t%.4f\tMRR@20:\t%.4f\tEpoch:\t%d,\t%d' % (
         best_result[0], best_result[1], best_epoch[0], best_epoch[1]))
