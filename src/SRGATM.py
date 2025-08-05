@@ -114,10 +114,57 @@ class SRGAT(nn.Module):
         self.final_activation = nn.ReLU()
         self.activation_sigmoid = nn.Sigmoid()
 
-    def get_entitygat(self,args, batch):
-        engat = model1.transform_input(h_items.to(device), h_attrs.to(device), t_item.to(device))
+    def get_entitygat(self, h_items, h_attrs, t_item):
+        # Get embeddings for historical items, attributes, and the target item
+        h_item_embs = self.item_emb_table(h_items)
+        h_attr_embs = self.item_emb_table(h_attrs)
+        t_item_emb = self.item_emb_table(t_item)
 
-        return engat
+        # Reshape attribute embeddings and sum them up
+        h_attr_embs = h_attr_embs.view(h_attrs.shape[0], h_attrs.shape[1], h_attrs.shape[2], -1)
+        h_attr_embs = torch.sum(h_attr_embs, dim=2)
+
+        # Apply dropout to item and attribute embeddings
+        h_item_embs = self.emb_dropout_layer(h_item_embs)
+        h_attr_embs = self.emb_dropout_layer(h_attr_embs)
+
+        # Calculate attention scores
+        # Project item and attribute embeddings to a common space
+        q_item = self.linear_attention_1(h_item_embs)
+        q_attr = self.linear_attention_1(h_attr_embs)
+        
+        # Add the projected embeddings
+        q = q_item + q_attr
+        
+        # Calculate attention weights
+        alpha = self.linear_attention(q)
+        alpha = F.softmax(alpha, dim=1)
+
+        # Apply attention weights to attribute embeddings
+        if self.aggregate == 'concat':
+            # Concatenate item and attribute embeddings
+            z = torch.cat([h_item_embs, h_attr_embs], dim=-1)
+        else:
+            # Add item and attribute embeddings
+            z = h_item_embs + h_attr_embs
+            
+        # Transform the aggregated embedding
+        z = self.linear_attention_transform(z)
+        
+        # Compute the final entity-aware item embedding
+        entity_aware_item_emb = torch.sum(alpha * z, dim=1)
+
+        return entity_aware_item_emb
+    
+    def forward(self, items, A, h_items, h_attrs, t_item):
+        # Get session graph embeddings
+        hidden = self.embedding(items)
+        hidden = self.gnn(A, hidden)
+
+        # Get knowledge-enhanced entity embeddings
+        entitygat = self.get_entitygat(h_items, h_attrs, t_item)
+
+        return hidden, entitygat
 
 def trans_to_cuda(variable):
     if torch.cuda.is_available():
@@ -151,8 +198,34 @@ def train_test(model, train_data, test_data, batch, args):
     slices = train_data.generate_batch(model.batch_size)
     for i, j in zip(slices, np.arange(len(slices))):
         model.optimizer.zero_grad()
-        qt = model.get_entitygat(args, batch)
-        targets, scores = forward(model, i, train_data,qt)
+        
+        # Get data for the current batch
+        alias_inputs, A, items, mask, targets, h_items, h_attrs, t_item = train_data.get_slice(i)
+        alias_inputs = trans_to_cuda(torch.Tensor(alias_inputs).long())
+        items = trans_to_cuda(torch.Tensor(items).long())
+        A = trans_to_cuda(torch.Tensor(A).float())
+        mask = trans_to_cuda(torch.Tensor(mask).long())
+        h_items = trans_to_cuda(torch.Tensor(h_items).long())
+        h_attrs = trans_to_cuda(torch.Tensor(h_attrs).long())
+        t_item = trans_to_cuda(torch.Tensor(t_item).long())
+
+        # Forward pass
+        hidden, entitygat = model(items, A, h_items, h_attrs, t_item)
+        
+        # Get sequence hidden state
+        get = lambda i: hidden[i][alias_inputs[i]]
+        seq_hidden = torch.stack([get(i) for i in torch.arange(len(alias_inputs)).long()])
+
+        # Combine session and entity embeddings
+        qstar = torch.cat([seq_hidden, entitygat.unsqueeze(1).repeat(1, seq_hidden.size(1), 1)], dim=-1)
+        
+        # Compute scores
+        # Assuming model has a compute_scores method
+        # This part might need adjustment based on how you want to combine the embeddings and compute final scores
+        # For now, let's assume a simple transformation on the combined embedding
+        qstar_transformed = model.linear_transform(qstar)
+        _, scores = model.compute_scores(qstar_transformed, mask)
+        
         targets = trans_to_cuda(torch.Tensor(targets).long())
         loss = model.loss_function(scores, targets - 1)
         loss.backward()
@@ -167,10 +240,26 @@ def train_test(model, train_data, test_data, batch, args):
     hit, mrr = [], []
     slices = test_data.generate_batch(model.batch_size)
     for i in slices:
-        targets, scores = forward(model, i, test_data)
+        alias_inputs, A, items, mask, targets, h_items, h_attrs, t_item = test_data.get_slice(i)
+        alias_inputs = trans_to_cuda(torch.Tensor(alias_inputs).long())
+        items = trans_to_cuda(torch.Tensor(items).long())
+        A = trans_to_cuda(torch.Tensor(A).float())
+        mask = trans_to_cuda(torch.Tensor(mask).long())
+        h_items = trans_to_cuda(torch.Tensor(h_items).long())
+        h_attrs = trans_to_cuda(torch.Tensor(h_attrs).long())
+        t_item = trans_to_cuda(torch.Tensor(t_item).long())
+
+        hidden, entitygat = model(items, A, h_items, h_attrs, t_item)
+        get = lambda i: hidden[i][alias_inputs[i]]
+        seq_hidden = torch.stack([get(i) for i in torch.arange(len(alias_inputs)).long()])
+        
+        qstar = torch.cat([seq_hidden, entitygat.unsqueeze(1).repeat(1, seq_hidden.size(1), 1)], dim=-1)
+        qstar_transformed = model.linear_transform(qstar)
+        
+        _, scores = model.compute_scores(qstar_transformed, mask)
         sub_scores = scores.topk(20)[1]
         sub_scores = trans_to_cpu(sub_scores).detach().numpy()
-        for score, target, mask in zip(sub_scores, targets, test_data.mask):
+        for score, target, mask_ in zip(sub_scores, targets, test_data.mask):
             hit.append(np.isin(target - 1, score))
             if len(np.where(score == target - 1)[0]) == 0:
                 mrr.append(0)

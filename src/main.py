@@ -57,8 +57,13 @@ def main():
         train_data = Data(train_data, shuffle=True)
         test_data = Data(test_data, shuffle=False)
         loader = utils.Loader(opt)
-    model = trans_to_cuda(SRGAT(opt, loader.n_entity,loader.n_relation,torch.Tensor(loader.D_node).to(device),torch.Tensor(loader.adj_entity).long().to(device),
+        n_node = loader.n_entity
+
+    model = trans_to_cuda(SRGAT(opt, n_node, loader.n_relation, 
+                                torch.Tensor(loader.D_node).to(device), 
+                                torch.Tensor(loader.adj_entity).long().to(device), 
                                 torch.Tensor(loader.adj_relation).long().to(device)))
+
 
 
     start = time.time()
@@ -68,7 +73,7 @@ def main():
     for epoch in range(opt.epoch):
         print('-------------------------------------------------------')
         print('epoch: ', epoch)
-        hit, mrr = train_test(model, train_data, test_data,opt.batchSize,opt )
+        hit, mrr = train_test(model, train_data, test_data, opt.batchSize, opt)
         flag = 0
         if hit >= best_result[0]:
             best_result[0] = hit
