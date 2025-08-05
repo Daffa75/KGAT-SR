@@ -58,7 +58,9 @@ class KGraph():
             raise nx.NodeNotFound(msg.format(source, target))
 
         if target == source:
-            return (source, sample_attr_nodes)
+            # When the source and target are the same, there are no attributes connecting them.
+            # Return a list of MASK values.
+            return (source, [self.MASK] * self.sample_attr_size)
 
         inter_attrs = list(set(self.Gadj[source]).intersection(set(self.Gadj[target])))
 
@@ -66,14 +68,21 @@ class KGraph():
         if len(inter_attrs):
             inter_attrs = sorted(inter_attrs, key=lambda x: self.nodes_degree[x])
         else:
+            # If there are no intersecting attributes, return MASK values.
             inter_attrs = [self.MASK]
 
         n_inter_attrs = len(inter_attrs)
+        
+        # --- FIX IS HERE ---
+        # The following logic ensures `sample_attr_nodes` is always assigned.
         if self.sample_attr_size >= n_inter_attrs:
+            # If the number of attributes is less than the sample size,
+            # use random choice with replacement to fill the array.
             sample_attr_nodes = np.random.choice(inter_attrs, size=self.sample_attr_size, replace=True)
         else:
-            # sample_attr_nodes = np.random.choice(inter_attrs, size = self.sample_attr_size, replace=False)
-            sample_attr_nodes = inter_attrs[:self.sample_attr_size]
+            # If there are enough attributes, sample without replacement.
+            # This was the original logic.
+            sample_attr_nodes = np.random.choice(inter_attrs, size=self.sample_attr_size, replace=False)
 
         return (source, sample_attr_nodes)
 
