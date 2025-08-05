@@ -49,12 +49,12 @@ print(opt)
 
 
 def main():
-    train_data_sessions = pickle.load(open('../datasets/' + opt.dataset + '/train.txt', 'rb'))
+    train_data_sessions = pickle.load(open('datasets/' + opt.dataset + '/train.txt', 'rb'))
     if opt.validation:
         train_data_sessions, valid_data_sessions = split_validation(train_data_sessions, opt.valid_portion)
         test_data_sessions = valid_data_sessions
     else:
-        test_data_sessions = pickle.load(open('../datasets/' + opt.dataset + '/test.txt', 'rb'))
+        test_data_sessions = pickle.load(open('datasets/' + opt.dataset + '/test.txt', 'rb'))
 
     # 1. Create the Knowledge Graph object
     kg = KGraph(dataset=opt.dataset, attr_size=opt.attr_size)
