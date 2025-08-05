@@ -179,28 +179,30 @@ def trans_to_cpu(variable):
         return variable
 
 def forward(model, i, data):
-    # The get_slice method now returns all the data we need
+    # 1. Get all necessary data from the loader
     alias_inputs, A, items, mask, targets, h_items, h_attrs, t_item = data.get_slice(i)
 
-    # Move data to GPU
+    # 2. Move all data tensors to the GPU
     alias_inputs = trans_to_cuda(torch.Tensor(alias_inputs).long())
     items = trans_to_cuda(torch.Tensor(items).long())
     A = trans_to_cuda(torch.Tensor(A).float())
     mask = trans_to_cuda(torch.Tensor(mask).long())
+    # Convert numpy arrays to tensors before moving to CUDA
     h_items = trans_to_cuda(torch.from_numpy(h_items).long())
     h_attrs = trans_to_cuda(torch.from_numpy(h_attrs).long())
     t_item = trans_to_cuda(torch.from_numpy(t_item).long())
 
-    # Get hidden states from the model
-    hidden = model(items, A)
-    
-    # Get the hidden state of the last item in each session
+    # --- FIX IS HERE ---
+    # 3. Call the model's forward pass with all required arguments
+    hidden, entitygat = model(items, A, h_items, h_attrs, t_item)
+
+    # 4. Extract the hidden state for the session sequence
     get = lambda i: hidden[i][alias_inputs[i]]
     seq_hidden = torch.stack([get(i) for i in torch.arange(len(alias_inputs)).long()])
-    
-    # Compute scores and return targets
-    _, scores = model.compute_scores(seq_hidden, mask)
-    return targets, scores
+
+    # 5. Compute the final scores using both session and KG embeddings
+    # The compute_scores method will handle the combination of seq_hidden and entitygat
+    return targets, model.compute_scores(seq_hidden, mask, entitygat)
 
 # Replace the existing train_test function in SRGATM.py
 def train_test(model, train_data, test_data, batch, args):
@@ -211,7 +213,7 @@ def train_test(model, train_data, test_data, batch, args):
     slices = train_data.generate_batch(model.batch_size)
     for i, j in zip(slices, np.arange(len(slices))):
         model.optimizer.zero_grad()
-        # The forward function now handles getting data and running the model
+        # The forward function now correctly calls the model
         targets, scores = forward(model, i, train_data)
         targets = trans_to_cuda(torch.Tensor(targets).long())
         loss = model.loss_function(scores, targets - 1)
@@ -230,7 +232,8 @@ def train_test(model, train_data, test_data, batch, args):
         targets, scores = forward(model, i, test_data)
         sub_scores = scores.topk(20)[1]
         sub_scores = trans_to_cpu(sub_scores).detach().numpy()
-        for score, target, mask in zip(sub_scores, targets, test_data.mask[i]):
+        # Ensure we use the correct mask for the current slice
+        for score, target, mask_slice in zip(sub_scores, targets, test_data.mask[i]):
             hit.append(np.isin(target - 1, score))
             if len(np.where(score == target - 1)[0]) == 0:
                 mrr.append(0)
